@@ -65,7 +65,7 @@ func main() {
 
 	// basic mem store creator
 	maker := func(id string) bridge.Store {
-		return &store.Memory{}
+		return store.NewStorage()
 	}
 
 	var webhooks []chan<- bridge.WebhookData

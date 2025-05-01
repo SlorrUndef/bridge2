@@ -66,7 +66,7 @@ func (s *SSE) handlePush(ctx *fasthttp.RequestCtx, ip string, authorized bool) {
 		ID:       uint64(tm.UnixNano()),
 		From:     clientId,
 		Message:  decoded,
-		Deadline: tm.Unix() + int64(ttl),
+		Deadline: tm.Add(time.Duration(ttl) * time.Second),
 	})
 	if !added {
 		log.Debug().Str("id", to).Msg("client buffer overflow")

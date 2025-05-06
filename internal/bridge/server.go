@@ -28,11 +28,15 @@ type IP struct {
 }
 
 type Event struct {
-	ID       uint64 `json:"-"`
-	Deadline int64  `json:"-"`
+	ID       uint64    `json:"-"`
+	Deadline time.Time `json:"-"`
 
 	From    string `json:"from"`
 	Message []byte `json:"message"`
+}
+
+func (e Event) IsExpired(now time.Time) bool {
+	return e.Deadline.Before(now)
 }
 
 type WebhookData struct {

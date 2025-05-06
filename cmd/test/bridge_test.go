@@ -146,7 +146,7 @@ func TestBridge(t *testing.T) {
 
 	// basic mem store creator
 	maker := func(id string) bridge.Store {
-		return &store.Memory{}
+		return store.NewStorage()
 	}
 
 	wh := make(chan bridge.WebhookData, 100)

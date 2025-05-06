@@ -31,7 +31,6 @@ func (s *SSE) handleSubscribe(ctx *fasthttp.RequestCtx, ip string, authorized bo
 		if u == nil {
 			u = &IP{}
 			s.ips[ip] = u
-
 		}
 
 		if u.ActiveConnections+1 > s.MaxConnectionsPerIP {
@@ -115,7 +114,7 @@ func (s *SSE) handleSubscribe(ctx *fasthttp.RequestCtx, ip string, authorized bo
 				"Access-Control-Allow-Credentials: true\r\n"
 		}
 		header += "Transfer-Encoding: chunked\r\n\r\n"
-		if _, err := conn.Write([]byte(header)); err != nil {
+		if _, err = conn.Write([]byte(header)); err != nil {
 			return
 		}
 
@@ -135,7 +134,7 @@ func (s *SSE) handleSubscribe(ctx *fasthttp.RequestCtx, ip string, authorized bo
 					continue
 				}
 
-				if err := sendEvent(conn, heartbeat); err != nil {
+				if err = sendEvent(conn, heartbeat); err != nil {
 					// stop listen
 					return
 				}
@@ -146,8 +145,12 @@ func (s *SSE) handleSubscribe(ctx *fasthttp.RequestCtx, ip string, authorized bo
 			log.Debug().Str("client", ids[idx]).Msg("event signal")
 
 			delivered := 0
+			maxID := lastEventId
 			err = clients[idx].ExecuteAll(lastEventId, func(e *Event) error {
 				delivered++
+				if e.ID > maxID {
+					maxID = e.ID
+				}
 
 				data, _ := json.Marshal(e) // not return an error to not break client
 				return sendEvent(conn, []byte("event: message"+
@@ -159,6 +162,8 @@ func (s *SSE) handleSubscribe(ctx *fasthttp.RequestCtx, ip string, authorized bo
 			}
 
 			metrics.Global.DeliveredMessages.Add(float64(delivered))
+
+			lastEventId = maxID
 			lastMessageAt = now
 		}
 	})

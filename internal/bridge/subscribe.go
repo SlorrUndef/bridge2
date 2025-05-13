@@ -63,28 +63,35 @@ func (s *SSE) handleSubscribe(ctx *fasthttp.RequestCtx, ip string, authorized bo
 		}
 	}
 
-	ids := strings.SplitN(idsStr, ",", s.MaxClientsPerSubscribe)
-	if len(ids) == s.MaxClientsPerSubscribe && strings.IndexByte(ids[s.MaxClientsPerSubscribe-1], ',') != -1 {
-		respError(ctx, "too many client_id passed", 400)
-		return
-	}
+	clients := make([]*Client, 0)
+	ids := make([]string, 0)
+	eventCases := make([]reflect.SelectCase, 0)
 
-	var clients []*Client
-	var eventCases []reflect.SelectCase
-
-	for _, id := range ids {
+	commaIndex := strings.IndexByte(idsStr, ',')
+	for commaIndex != -1 {
+		id := idsStr[:commaIndex]
 		if id == "" || len(id) > 64 {
 			respError(ctx, "invalid client_id", 400)
 			return
 		}
 
-		cli := s.client(id, true)
+		ids = append(ids, id)
+		if len(ids) > s.MaxClientsPerSubscribe {
+			respError(ctx, "too many client_id passed", 400)
+			return
+		}
 
+		cli := s.client(id, true)
 		clients = append(clients, cli)
+
 		eventCases = append(eventCases, reflect.SelectCase{
 			Chan: reflect.ValueOf(cli.Signal),
 			Dir:  reflect.SelectRecv,
 		})
+
+		idsStr = idsStr[commaIndex+1:]
+
+		commaIndex = strings.IndexByte(idsStr, ',')
 	}
 
 	// hijack connection for resource efficient manual control
@@ -135,7 +142,7 @@ func (s *SSE) handleSubscribe(ctx *fasthttp.RequestCtx, ip string, authorized bo
 					continue
 				}
 
-				if err := sendEvent(conn, heartbeat); err != nil {
+				if err = sendEvent(conn, heartbeat); err != nil {
 					// stop listen
 					return
 				}
@@ -150,9 +157,14 @@ func (s *SSE) handleSubscribe(ctx *fasthttp.RequestCtx, ip string, authorized bo
 				delivered++
 
 				data, _ := json.Marshal(e) // not return an error to not break client
-				return sendEvent(conn, []byte("event: message"+
-					"\r\nid: "+strconv.FormatUint(e.ID, 10)+
-					"\r\ndata: "+string(data)+"\r\n\r\n"))
+
+				msgBuf := []byte("event: message\r\nid: ")
+				msgBuf = strconv.AppendUint(msgBuf, e.ID, 10)
+				msgBuf = append(msgBuf, "\r\ndata: "...)
+				msgBuf = append(msgBuf, data...)
+				msgBuf = append(msgBuf, "\r\n\r\n"...)
+
+				return sendEvent(conn, msgBuf)
 			})
 			if err != nil {
 				return // stop listen
@@ -165,10 +177,14 @@ func (s *SSE) handleSubscribe(ctx *fasthttp.RequestCtx, ip string, authorized bo
 }
 
 func sendEvent(w net.Conn, data []byte) error {
-	data = append([]byte(strconv.FormatInt(int64(len(data)), 16)+"\r\n"), data...)
-	data = append(data, '\r', '\n')
+	var chunkBuffer []byte
 
-	if _, err := w.Write(data); err != nil {
+	chunkBuffer = strconv.AppendInt(chunkBuffer, int64(len(data)), 16)
+	chunkBuffer = append(chunkBuffer, '\r', '\n')
+	chunkBuffer = append(chunkBuffer, data...)
+	chunkBuffer = append(chunkBuffer, '\r', '\n')
+
+	if _, err := w.Write(chunkBuffer); err != nil {
 		return err
 	}
 	return nil

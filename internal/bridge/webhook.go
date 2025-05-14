@@ -12,8 +12,11 @@ import (
 )
 
 func NewWebhook(url, auth string, workers, queueSize int) chan<- WebhookData {
-	cli := http.Client{
+	cli := &http.Client{
 		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConnsPerHost: workers,
+		},
 	}
 
 	ch := make(chan WebhookData, queueSize)

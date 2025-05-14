@@ -2,12 +2,62 @@ package bridge
 
 import (
 	"encoding/base64"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/valyala/fasthttp"
 	"tonconnect-bridge/internal/bridge/metrics"
 )
+
+var (
+	dataChunkSizeClasses = []int{
+		1 << 2,
+		1 << 4,
+		1 << 6,
+		1 << 8,
+		1 << 10,
+		2 << 10,
+		4 << 10,
+		8 << 10,
+		16 << 10,
+		32 << 10,
+		64 << 10,
+	}
+
+	decodedBufPools = [...]sync.Pool{
+		{New: func() any { return make([]byte, 1<<2) }},
+		{New: func() any { return make([]byte, 1<<4) }},
+		{New: func() any { return make([]byte, 1<<6) }},
+		{New: func() any { return make([]byte, 1<<8) }},
+		{New: func() any { return make([]byte, 1<<10) }},
+		{New: func() any { return make([]byte, 2<<10) }},
+		{New: func() any { return make([]byte, 4<<10) }},
+		{New: func() any { return make([]byte, 8<<10) }},
+		{New: func() any { return make([]byte, 16<<10) }},
+		{New: func() any { return make([]byte, 32<<10) }},
+		{New: func() any { return make([]byte, 64<<10) }},
+	}
+)
+
+func getDecodedBufChunk(size int) []byte {
+	i := 0
+	for ; i < len(dataChunkSizeClasses)-1; i++ {
+		if size <= dataChunkSizeClasses[i] {
+			break
+		}
+	}
+	return decodedBufPools[i].Get().([]byte)
+}
+
+func putDecodedBufChunk(p []byte) {
+	for i, n := range dataChunkSizeClasses {
+		if len(p) == n {
+			decodedBufPools[i].Put(p)
+			return
+		}
+	}
+}
 
 func (s *SSE) handlePush(ctx *fasthttp.RequestCtx, ip string, authorized bool) {
 	if !ctx.IsPost() {
@@ -50,14 +100,16 @@ func (s *SSE) handlePush(ctx *fasthttp.RequestCtx, ip string, authorized bool) {
 		return
 	}
 
-	// decode to validate and decrease size
-	decoded := make([]byte, decodedLen)
-	decLen, err := base64.StdEncoding.Decode(decoded, body)
+	decodedBuf := getDecodedBufChunk(decodedLen)
+	defer putDecodedBufChunk(decodedBuf)
+
+	decoded, err := base64.StdEncoding.Decode(decodedBuf[:decodedLen], body)
 	if err != nil {
 		respError(ctx, "invalid payload", 400)
 		return
 	}
-	decoded = decoded[:decLen]
+
+	decodedData := decodedBuf[:decoded]
 
 	cli := s.client(to, false)
 
@@ -65,7 +117,7 @@ func (s *SSE) handlePush(ctx *fasthttp.RequestCtx, ip string, authorized bool) {
 	added := cli.Push(&Event{
 		ID:       uint64(tm.UnixNano()),
 		From:     clientId,
-		Message:  decoded,
+		Message:  decodedData,
 		Deadline: tm.Unix() + int64(ttl),
 	})
 	if !added {
@@ -83,7 +135,7 @@ func (s *SSE) handlePush(ctx *fasthttp.RequestCtx, ip string, authorized bool) {
 		wh := WebhookData{
 			ClientID: clientId,
 			Topic:    topic,
-			Hash:     decoded,
+			Hash:     decodedData,
 		}
 
 		for i, webhook := range s.webhooks {
